@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>🐋 ORCA Deep Dive 🐋</title>
+<style>
+  html, body {margin:0; padding:0; height:100%; font-family:'Courier New',monospace; background: linear-gradient(180deg,#001122 0%,#003366 50%,#000033 100%);}
+  .wrap {display:flex; flex-direction:column; align-items:center; gap:12px; padding:10px;}
+  canvas {border:3px solid #00ffff; border-radius:20px; box-shadow:0 0 20px #00ffff44; background: radial-gradient(circle at 50% 50%, #001a33 0%, #000011 100%);}
+  .hud {display:flex; gap:12px; align-items:center; padding:10px; background: linear-gradient(45deg,#ff6b00,#ff8533); border-radius:15px; color:#000; font-weight:bold; flex-wrap:wrap; justify-content:center;}
+  .btn {background:linear-gradient(45deg,#00ffff,#33ccff); color:#000; padding:18px 30px; border-radius:20px; border:none; font-weight:bold; cursor:pointer; font-size:20px; box-shadow:0 4px 15px rgba(0,255,255,0.3);}
+  .btn:hover{transform:translateY(-2px); box-shadow:0 6px 20px rgba(0,255,255,0.5);}
+  .mystery {font-size:18px; text-align:center; color:#ffff00; text-shadow:0 0 10px #ffff0066; animation:glow 2s ease-in-out infinite alternate;}
+  @keyframes glow{from{text-shadow:0 0 10px #ffff0066;} to{text-shadow:0 0 20px #ffff00,0 0 30px #ffff0066;}}
+  .link{color:#00ff00; text-decoration:underline; cursor:pointer; font-weight:bold;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="main-mystery" class="mystery">🌊 What is ORCA about? 🌊</div>
+  <canvas id="game"></canvas>
+  <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:12px;">
+    <div class="hud">🔍 Lettres: <span id="letters">?</span></div>
+    <div class="hud">🏆 Score: <span id="score">0</span></div>
+    <div class="hud">💨 Oxygen: <span id="oxygen">100%</span></div>
+    <button id="startBtn" class="btn">🐋 START DIVING</button>
+  </div>
+  <div id="mystery-text" class="mystery" style="font-size:16px; max-width:600px;"></div>
+</div>
+
+<script>
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d');
+let W=canvas.width,H=canvas.height;
+
+// Resize canvas for mobile
+function resizeCanvas(){
+  W=window.innerWidth*0.95;
+  H=window.innerHeight*0.6;
+  canvas.width=W;
+  canvas.height=H;
+}
+window.addEventListener('resize',resizeCanvas);
+resizeCanvas();
+
+// Game state
+let running=false,score=0,cluesFound=0,oxygen=100,gameTime=0,bubbleTimer=0,gameComplete=false;
+const startBtn=document.getElementById('startBtn');
+const scoreEl=document.getElementById('score');
+const lettersEl=document.getElementById('letters');
+const oxygenEl=document.getElementById('oxygen');
+const mysteryEl=document.getElementById('mystery-text');
+const mainMysteryEl=document.getElementById('main-mystery');
+
+const player={x:W/2,y:H/2,vx:0,vy:0,size:Math.min(W,H)*0.04,angle:0,trail:[]};
+const bubbles=[],clueItems=[],particles=[];
+
+// ORCA sequence
+const orcaSequence=[
+  {letter:'O',message:'O is for Océan',color:'#0099ff'},
+  {letter:'R',message:'R is for Règles',color:'#ff6600'},
+  {letter:'C',message:'C is for Conformité',color:'#00ff66'},
+  {letter:'A',message:'A is for Audit',color:'#ff3366'},
+  {letter:'🔑',message:'Océan de Règles et Conformité en Audit',color:'#ffff00'}
+];
+let currentClueIndex=0,collectedLetters=[];
+
+// Controls
+const keys={};
+window.addEventListener('keydown',e=>{keys[e.code]=true;e.preventDefault();});
+window.addEventListener('keyup',e=>{keys[e.code]=false;});
+
+let mouseDown=false,mouseX=0,mouseY=0;
+canvas.addEventListener('mousedown',e=>{mouseDown=true;updateMouse(e);});
+canvas.addEventListener('mousemove',e=>{if(mouseDown)updateMouse(e);});
+canvas.addEventListener('mouseup',()=>{mouseDown=false;});
+canvas.addEventListener('touchstart',e=>{mouseDown=true;updateTouch(e);});
+canvas.addEventListener('touchmove',e=>{updateTouch(e);});
+canvas.addEventListener('touchend',()=>{mouseDown=false;});
+
+function updateMouse(e){const rect=canvas.getBoundingClientRect();mouseX=e.clientX-rect.left;mouseY=e.clientY-rect.top;}
+function updateTouch(e){e.preventDefault();const rect=canvas.getBoundingClientRect();mouseX=e.touches[0].clientX-rect.left;mouseY=e.touches[0].clientY-rect.top;}
+
+function spawnBubble(){bubbles.push({x:Math.random()*W,y:H+20,size:Math.random()*15+5,speed:Math.random()*2+1,wobble:Math.random()*Math.PI*2,alpha:Math.random()*0.5+0.3});}
+function spawnNextClue(){
+  if(currentClueIndex<orcaSequence.length&&clueItems.length===0){
+    const clue=orcaSequence[currentClueIndex];
+    clueItems.push({x:Math.random()*(W-80)+40,y:Math.random()*(H-80)+40,size:25,letter:clue.letter,color:clue.color,bob:Math.random()*Math.PI*2,glow:0,collected:false});
+  }
+}
+function spawnParticles(x,y,color,count=15){for(let i=0;i<count;i++){particles.push({x,y,vx:(Math.random()-0.5)*8,vy:(Math.random()-0.5)*8,life:1,color,size:Math.random()*6+2});}}
+
+function updateMainMysteryText(){
+  if(currentClueIndex===0){mainMysteryEl.textContent="What is ORCA about?";mainMysteryEl.style.color="#ffff00";}
+  else if(currentClueIndex<orcaSequence.length){const prev=orcaSequence[currentClueIndex-1];mainMysteryEl.textContent=prev.message;mainMysteryEl.style.color=prev.color;}
+  else{mainMysteryEl.textContent="Océan de Règles et Conformité en Audit";mainMysteryEl.style.color="#00ff00";}
+}
+
+function reset(){
+  bubbles.length=0;clueItems.length=0;particles.length=0;
+  player.x=W/2;player.y=H/2;player.vx=0;player.vy=0;player.trail=[];
+  score=0;cluesFound=0;currentClueIndex=0;collectedLetters=[];oxygen=100;gameTime=0;gameComplete=false;
+  mysteryEl.textContent="";updateMainMysteryText();updateLettersDisplay();
+}
+
+function startGame(){reset();running=true;startBtn.textContent='🔄 RESTART DIVE';spawnNextClue();loop();}
+
+function updateLettersDisplay(){
+  let display='';
+  for(let i=0;i<orcaSequence.length;i++){
+    if(i<collectedLetters.length){display+=`<span style="color:${orcaSequence[i].color}; font-weight:bold;">${orcaSequence[i].letter}</span> `;}
+    else if(i===currentClueIndex){display+=`<span style="color:#ffff00; animation:glow 1s infinite;">?</span> `;}
+    else{display+=`<span style="color:#666;">?</span> `;}
+  }
+  lettersEl.innerHTML=display;
+}
+
+// Player update
+function updatePlayer(){
+  if(keys['ArrowLeft']||keys['KeyA'])player.vx-=0.3;
+  if(keys['ArrowRight']||keys['KeyD'])player.vx+=0.3;
+  if(keys['ArrowUp']||keys['KeyW'])player.vy-=0.3;
+  if(keys['ArrowDown']||keys['KeyS'])player.vy+=0.3;
+  if(mouseDown){const dx=mouseX-player.x,dy=mouseY-player.y;player.vx+=dx*0.01;player.vy+=dy*0.01;}
+  player.vx*=0.95;player.vy*=0.95;player.x+=player.vx;player.y+=player.vy;
+  player.x=Math.max(player.size,Math.min(W-player.size,player.x));
+  player.y=Math.max(player.size,Math.min(H-player.size,player.y));
+  if(Math.abs(player.vx)>0.1||Math.abs(player.vy)>0.1)player.angle=Math.atan2(player.vy,player.vx);
+  player.trail.push({x:player.x,y:player.y,life:1});if(player.trail.length>15)player.trail.shift();player.trail.forEach(t=>t.life-=0.07);
+}
+
+// Game update
+function updateGame(){
+  if(gameComplete)return;
+  gameTime++;if(bubbleTimer++>20){spawnBubble();bubbleTimer=0;}
+
+  clueItems.forEach(clue=>{
+    clue.bob+=0.08;clue.glow=Math.sin(gameTime*0.1)*0.5+0.5;
+    const dx=player.x-clue.x,dy=player.y-clue.y,dist=Math.sqrt(dx*dx+dy*dy);
+    if(dist<player.size+clue.size&&!clue.collected){
+      clue.collected=true;cluesFound++;score+=100;collectedLetters.push(clue.letter);
+      spawnParticles(clue.x,clue.y,clue.color,20);currentClueIndex++;updateMainMysteryText();updateLettersDisplay();
+      mysteryEl.textContent=`Found: ${orcaSequence[currentClueIndex-1].message}`;mysteryEl.style.color=clue.color;
+      setTimeout(()=>{mysteryEl.textContent="";},2000);
+      if(currentClueIndex<orcaSequence.length)setTimeout(()=>{spawnNextClue();},1500);
+      else setTimeout(()=>{gameComplete=true;running=false;showWinScreen();},2500);
+    }
+  });
+
+  for(let i=clueItems.length-1;i>=0;i--){if(clueItems[i].collected)clueItems.splice(i,1);}
+  for(let i=particles.length-1;i>=0;i--){const p=particles[i];p.x+=p.vx;p.y+=p.vy;p.vx*=0.98;p.vy*=0.98;p.life-=0.02;if(p.life<=0)particles.splice(i,1);}
+
+  // Oxygen only decreases
+  oxygen-=0.05;
+  if(oxygen<=0&&!gameComplete){running=false;showGameOver();}
+}
+
+// Drawing
+function drawBackground(){
+  const gradient=ctx.createRadialGradient(W/2,H/2,0,W/2,H/2,W);gradient.addColorStop(0,'#001a33');gradient.addColorStop(0.5,'#002244');gradient.addColorStop(1,'#000011');ctx.fillStyle=gradient;ctx.fillRect(0,0,W,H);
+  ctx.save();ctx.globalAlpha=0.1;for(let i=0;i<5;i++){const x=(W/6)*(i+1)+Math.sin(gameTime*0.01+i)*20;const grad=ctx.createLinearGradient(x,0,x+50,H);grad.addColorStop(0,'#ffffff');grad.addColorStop(1,'transparent');ctx.fillStyle=grad;ctx.fillRect(x,0,30,H);}ctx.restore();
+}
+
+function drawPlayer(){
+  ctx.globalAlpha=0.6;player.trail.forEach(t=>{if(t.life>0){ctx.fillStyle=`rgba(0,255,255,${t.life*0.5})`;ctx.beginPath();ctx.arc(t.x,t.y,player.size*t.life*0.8,0,Math.PI*2);ctx.fill();}});ctx.globalAlpha=1;
+  ctx.save();ctx.translate(player.x,player.y);ctx.rotate(player.angle);
+  ctx.fillStyle='#00ffff';ctx.beginPath();ctx.moveTo(-player.size,-player.size/2);ctx.lineTo(player.size,0);ctx.lineTo(-player.size,player.size/2);ctx.closePath();ctx.fill();
+  ctx.restore();
+}
+
+function drawBubbles(){bubbles.forEach(b=>{ctx.globalAlpha=b.alpha;ctx.fillStyle='#ffffff';ctx.beginPath();ctx.arc(b.x,b.y,b.size,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;});}
+function drawClues(){clueItems.forEach(clue=>{const bobY=Math.sin(clue.bob)*8;const glowSize=clue.size+clue.glow*15;
+  ctx.save();ctx.globalAlpha=0.4;ctx.fillStyle=clue.color;ctx.beginPath();ctx.arc(clue.x,clue.y+bobY,glowSize,0,Math.PI*2);ctx.fill();ctx.restore();
+  ctx.fillStyle=clue.color;ctx.beginPath();ctx.arc(clue.x,clue.y+bobY,clue.size,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#000';ctx.font='bold 20px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(clue.letter,clue.x,clue.y+bobY);});}
+
+function drawParticles(){particles.forEach(p=>{ctx.globalAlpha=p.life;ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x,p.y,p.size*p.life,0,Math.PI*2);ctx.fill();});ctx.globalAlpha=1;}
+function updateUI(){scoreEl.textContent=score;oxygenEl.textContent=`${Math.max(0,Math.floor(oxygen))}%`;const oxygenColor=oxygen>50?'#00ff00':oxygen>25?'#ffff00':'#ff0000';oxygenEl.parentElement.style.background=`linear-gradient(45deg, ${oxygenColor}, ${oxygenColor}aa)`;}
+
+function showGameOver(){
+  ctx.fillStyle='rgba(0,0,0,0.8)';ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#ff0000';ctx.font='bold 36px Arial';ctx.textAlign='center';ctx.fillText('🫁 OUT OF OXYGEN! 🫁',W/2,H/2-60);
+  ctx.fillStyle='#ffffff';ctx.font='20px Arial';ctx.fillText(`You found ${cluesFound}/${orcaSequence.length} clues`,W/2,H/2-20);
+  ctx.fillText(`Final Score: ${score}`,W/2,H/2+10);ctx.fillStyle='#ffff00';ctx.font='16px Arial';
+  ctx.fillText('Retry to discover all ORCA secrets!',W/2,H/2+50);
+}
+
+function showWinScreen(){
+  ctx.fillStyle='rgba(0,0,0,0.9)';ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#00ff00';ctx.font='bold 32px Arial';ctx.textAlign='center';ctx.fillText('🎉 CONGRATULATIONS! 🎉',W/2,H/2-80);
+  ctx.fillStyle='#ffffff';ctx.font='20px Arial';ctx.fillText('You\'ve discovered ORCA!',W/2,H/2-40);
+  ctx.fillStyle='#ffff00';ctx.font='bold 24px Arial';ctx.fillText('JOIN OUR CLUB TODAY!',W/2,H/2);
+  ctx.fillStyle='#00ffff';ctx.font='18px Arial';ctx.fillText('Click the link below:',W/2,H/2+40);
+  mysteryEl.innerHTML='<span class="link" onclick="window.open(\'https://forms.gle/ArGGxTUkNL4Pg58r8\',\'_blank\')">🔗 JOIN ORCA CLUB NOW! 🔗</span>';
+  mysteryEl.style.color='#00ff00';mysteryEl.style.fontSize='20px';
+}
+
+function loop(){if(!running)return;requestAnimationFrame(loop);drawBackground();updatePlayer();updateGame();drawBubbles();drawClues();drawPlayer();drawParticles();updateUI();}
+
+// Initialize
+startBtn.addEventListener('click',startGame);
+updateLettersDisplay();updateMainMysteryText();
+drawBackground();ctx.fillStyle='#00ffff';ctx.font='bold 32px Arial';ctx.textAlign='center';
+ctx.fillText('🐋 ORCA DEEP DIVE 🐋',W/2,H/2-40);ctx.fillStyle='#ffffff';ctx.font='18px Arial';
+ctx.fillText('Discover the mystery of ORCA...',W/2,H/2);ctx.font='14px Arial';ctx.fillText('Use WASD/Arrows or Touch to dive',W/2,H/2+30);
+</script>
+</body>
+</html>
+
